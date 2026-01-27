@@ -1,0 +1,46 @@
+{
+  "user_profile": {
+    "name": "Your Name",
+    "industries": ["tech", "finance"],
+    "companies": ["Your Company"],
+    "roles": ["Software Engineer", "Angel Investor"],
+    "interests": ["AI", "startups"],
+    "ignore_senders": ["Colleague Name", "Your Boss"],
+    "custom_role_keywords": [
+      "\\bmy custom role\\b"
+    ]
+  },
+  "time_request_keywords": [
+    "\\b(quick call|brief call|coffee chat)\\b",
+    "\\b(pick your brain|15 minutes)\\b"
+  ],
+  "financial_advisor_patterns": [
+    "\\b(financial advisor|wealth manager|cfp)\\b",
+    "\\b(retirement planning|portfolio review)\\b"
+  ],
+  "franchise_consultant_patterns": [
+    "\\bfranchise.{0,20}(consult|opportunity)\\b",
+    "\\bbe your own boss\\b"
+  ],
+  "expert_network_patterns": [
+    "\\b(glg|alphasights|guidepoint)\\b",
+    "\\bpaid.{0,15}consultation\\b"
+  ],
+  "angel_investor_patterns": [
+    "\\bangel.{0,10}(round|investor)\\b",
+    "\\bseed.{0,10}funding\\b"
+  ],
+  "recruiter_patterns": [
+    "\\b(position|role).{0,20}(available|open)\\b",
+    "\\bperfect.{0,10}(fit|match)\\b"
+  ],
+  "fake_personalization_patterns": [
+    "\\bloved your (recent )?post\\b",
+    "\\bimpressive (background|profile)\\b"
+  ],
+  "flattery_patterns": [
+    ["\\b(impressive|amazing|incredible)\\b", 1],
+    ["\\blove what you're doing\\b", 2],
+    ["\\bthought leader\\b", 2]
+  ]
+}

@@ -1,0 +1,18 @@
+# Core dependencies
+python-dateutil>=2.8.0    # Better date parsing
+chardet>=5.0.0            # Encoding detection
+
+# Optional: LLM-powered analysis (install one or more)
+# openai>=1.60.0            # For --llm openai
+# anthropic>=0.76.0         # For --llm anthropic
+# ollama>=0.6.0             # For --llm ollama (local, free!)
+# google-genai>=1.0.0       # For --llm gemini (replaces deprecated google-generativeai)
+# groq>=1.0.0               # For --llm groq (fast inference)
+# mistralai>=1.5.0          # For --llm mistral
+
+# Optional: Advanced LLM features
+# numpy>=1.24.0             # For message clustering
+# scikit-learn>=1.3.0       # For clustering algorithms
+
+# Optional: Web dashboard
+# flask>=3.0.0              # For --web option
