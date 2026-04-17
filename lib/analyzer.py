@@ -3,7 +3,7 @@
 import csv
 import logging
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Sequence
@@ -38,6 +38,7 @@ from lib.patterns import (
 )
 from lib.profile import UserProfile
 from lib.llm import LLMAnalyzer
+from lib.types import ConversationThread, FlatteryMessage, Message, SenderSummary, ThreadTriageItem, TimeRequest
 
 # Optional imports - checked at runtime
 try:
@@ -71,8 +72,8 @@ class LinkedInMessageAnalyzer:
         self.llm_analyzer = llm_analyzer
 
         # Message collections
-        self.messages: list[dict[str, Any]] = []
-        self.time_requests: list[dict[str, Any]] = []
+        self.messages: list[Message] = []
+        self.time_requests: list[TimeRequest] = []
         self.financial_advisor_messages: list[dict[str, Any]] = []
         self.role_confusion_messages: list[dict[str, Any]] = []
         self.fake_personalization_messages: list[dict[str, Any]] = []
@@ -82,7 +83,7 @@ class LinkedInMessageAnalyzer:
             'by_hour': defaultdict(int),
             'by_day': defaultdict(int)
         }
-        self.flattery_scores: list[dict[str, Any]] = []
+        self.flattery_scores: list[FlatteryMessage] = []
         self.my_responses: set[str] = set()
         self.franchise_consultant_messages: list[dict[str, Any]] = []
         self.expert_network_messages: list[dict[str, Any]] = []
@@ -97,6 +98,7 @@ class LinkedInMessageAnalyzer:
 
         # LLM analysis results
         self.llm_analyses: list[dict[str, Any]] = []
+        self.llm_run_config: dict[str, Any] = {}
 
     def load_messages(self) -> 'LinkedInMessageAnalyzer':
         """Load and parse the LinkedIn messages.csv export.
@@ -237,7 +239,7 @@ class LinkedInMessageAnalyzer:
 
         logger.debug(f"CSV columns validated: {list(fieldnames) if fieldnames else []}")
 
-    def _parse_row(self, row: dict[str, Any]) -> dict[str, Any]:
+    def _parse_row(self, row: dict[str, Any]) -> Message:
         """Parse a single CSV row into a message dict.
 
         Args:
@@ -332,7 +334,7 @@ class LinkedInMessageAnalyzer:
                 return minutes
         return TIME_ESTIMATES['default']
 
-    def _is_from_me(self, message: dict[str, Any], my_name: str | None = None) -> bool:
+    def _is_from_me(self, message: Message, my_name: str | None = None) -> bool:
         """Determine if message is from the user (not incoming)."""
         # Check FOLDER field - SENT or similar indicates outgoing
         folder = message.get('folder', '').upper()
@@ -353,7 +355,7 @@ class LinkedInMessageAnalyzer:
 
         return False
 
-    def _should_skip_message(self, message: dict[str, Any], my_name: str | None = None) -> bool:
+    def _should_skip_message(self, message: Message, my_name: str | None = None) -> bool:
         """Check if a message should be skipped (from self or ignored sender)."""
         if self._is_from_me(message, my_name):
             return True
@@ -412,6 +414,469 @@ class LinkedInMessageAnalyzer:
         found_count = len(target_list) - initial_count
         logger.info(f"Found {found_count} {category_name} messages")
         return found_count
+
+    def _message_sort_key(self, message: Message) -> datetime:
+        """Return a stable sort key for messages, handling missing dates."""
+        return message.get('date') or datetime.min
+
+    def _thread_sort_key(self, thread: ConversationThread) -> datetime:
+        """Return a stable sort key for threads, handling missing dates."""
+        return thread.get('last_message_at') or datetime.min
+
+    def _get_conversation_key(self, message: Message, index: int) -> str:
+        """Return a stable conversation key, even for malformed rows."""
+        conversation_id = (message.get('conversation_id') or '').strip()
+        if conversation_id:
+            return conversation_id
+        return f"__message_{index}"
+
+    def _get_primary_thread_sender(
+        self,
+        messages: list[Message],
+        my_name: str | None = None,
+    ) -> str:
+        """Infer the main non-user sender for a conversation thread."""
+        incoming_senders = [
+            (message.get('from') or '').strip()
+            for message in messages
+            if not self._is_from_me(message, my_name) and (message.get('from') or '').strip()
+        ]
+        if incoming_senders:
+            return Counter(incoming_senders).most_common(1)[0][0]
+
+        for message in messages:
+            sender = (message.get('from') or '').strip()
+            if sender:
+                return sender
+
+        return ''
+
+    def get_conversation_threads(
+        self,
+        my_name: str | None = None,
+    ) -> dict[str, ConversationThread]:
+        """Group loaded messages into sorted conversation threads.
+
+        Args:
+            my_name: Optional user name override for distinguishing incoming vs outgoing
+
+        Returns:
+            Dict keyed by conversation id with aggregated thread metadata
+        """
+        grouped_messages: dict[str, list[Message]] = defaultdict(list)
+
+        for index, message in enumerate(self.messages):
+            grouped_messages[self._get_conversation_key(message, index)].append(message)
+
+        threads: list[tuple[str, ConversationThread]] = []
+        for conversation_id, messages in grouped_messages.items():
+            sorted_messages = sorted(messages, key=self._message_sort_key)
+            incoming_messages = [msg for msg in sorted_messages if not self._is_from_me(msg, my_name)]
+            outgoing_messages = [msg for msg in sorted_messages if self._is_from_me(msg, my_name)]
+            participants = sorted({
+                (message.get('from') or '').strip()
+                for message in sorted_messages
+                if (message.get('from') or '').strip()
+            })
+            conversation_title = next(
+                ((message.get('conversation_title') or '').strip() for message in sorted_messages
+                 if (message.get('conversation_title') or '').strip()),
+                '',
+            )
+
+            thread: ConversationThread = {
+                'conversation_id': conversation_id,
+                'conversation_title': conversation_title,
+                'participants': participants,
+                'primary_sender': self._get_primary_thread_sender(sorted_messages, my_name=my_name),
+                'message_count': len(sorted_messages),
+                'incoming_count': len(incoming_messages),
+                'outgoing_count': len(outgoing_messages),
+                'first_message_at': sorted_messages[0].get('date') if sorted_messages else None,
+                'last_message_at': sorted_messages[-1].get('date') if sorted_messages else None,
+                'has_response_from_me': bool(outgoing_messages),
+                'messages': sorted_messages,
+            }
+            threads.append((conversation_id, thread))
+
+        threads.sort(key=lambda item: self._thread_sort_key(item[1]), reverse=True)
+        return dict(threads)
+
+    def get_sender_summaries(
+        self,
+        my_name: str | None = None,
+    ) -> list[SenderSummary]:
+        """Aggregate thread-level activity into sender-level summaries.
+
+        Args:
+            my_name: Optional user name override for distinguishing incoming vs outgoing
+
+        Returns:
+            Sender summaries sorted by unanswered incoming volume and recency
+        """
+        threads = self.get_conversation_threads(my_name=my_name)
+        sender_threads: dict[str, list[ConversationThread]] = defaultdict(list)
+
+        for thread in threads.values():
+            sender = (thread.get('primary_sender') or '').strip()
+            if not sender or thread.get('incoming_count', 0) == 0:
+                continue
+            sender_threads[sender].append(thread)
+
+        summaries: list[SenderSummary] = []
+        for sender, thread_list in sender_threads.items():
+            responded_threads = [thread for thread in thread_list if thread.get('has_response_from_me')]
+            unanswered_threads = [thread for thread in thread_list if not thread.get('has_response_from_me')]
+            first_contacts = [thread.get('first_message_at') for thread in thread_list if thread.get('first_message_at')]
+            last_contacts = [thread.get('last_message_at') for thread in thread_list if thread.get('last_message_at')]
+
+            summaries.append({
+                'sender': sender,
+                'conversation_count': len(thread_list),
+                'message_count': sum(thread.get('incoming_count', 0) for thread in thread_list),
+                'responded_conversation_count': len(responded_threads),
+                'unanswered_conversation_count': len(unanswered_threads),
+                'unanswered_message_count': sum(
+                    thread.get('incoming_count', 0) for thread in unanswered_threads
+                ),
+                'has_received_response': bool(responded_threads),
+                'first_contact': min(first_contacts) if first_contacts else None,
+                'last_contact': max(last_contacts) if last_contacts else None,
+                'conversation_ids': [thread['conversation_id'] for thread in thread_list],
+            })
+
+        summaries.sort(
+            key=lambda summary: (
+                summary.get('unanswered_message_count', 0),
+                summary.get('conversation_count', 0),
+                summary.get('last_contact') or datetime.min,
+            ),
+            reverse=True,
+        )
+        return summaries
+
+    def get_unanswered_threads(
+        self,
+        my_name: str | None = None,
+        min_incoming_messages: int = 2,
+    ) -> list[ConversationThread]:
+        """Return unanswered incoming threads ranked for follow-up triage.
+
+        Args:
+            my_name: Optional user name override for distinguishing incoming vs outgoing
+            min_incoming_messages: Minimum incoming message count required to include a thread
+
+        Returns:
+            Unanswered threads sorted by persistence and recency
+        """
+        unanswered_threads = [
+            thread
+            for thread in self.get_conversation_threads(my_name=my_name).values()
+            if not thread.get('has_response_from_me')
+            and thread.get('incoming_count', 0) >= min_incoming_messages
+        ]
+        unanswered_threads.sort(
+            key=lambda thread: (
+                thread.get('incoming_count', 0),
+                thread.get('message_count', 0),
+                thread.get('last_message_at') or datetime.min,
+            ),
+            reverse=True,
+        )
+        return unanswered_threads
+
+    def get_thread_labels(self) -> dict[str, list[str]]:
+        """Map conversation ids to detected category labels."""
+        category_sources = [
+            ('time_request', self.time_requests),
+            ('financial_advisor', self.financial_advisor_messages),
+            ('franchise_consultant', self.franchise_consultant_messages),
+            ('expert_network', self.expert_network_messages),
+            ('angel_investor', self.angel_investor_messages),
+            ('recruiter', self.recruiter_messages),
+            ('role_confusion', self.role_confusion_messages),
+            ('fake_personalization', self.fake_personalization_messages),
+            ('template', self.template_messages),
+            ('ai_generated', self.ai_generated_messages),
+            ('crypto_hustler', self.crypto_hustler_messages),
+            ('mlm', self.mlm_messages),
+        ]
+        labels_by_thread: dict[str, list[str]] = defaultdict(list)
+
+        for label, items in category_sources:
+            for item in items:
+                conversation_id = item.get('conversation_id', '')
+                if conversation_id and label not in labels_by_thread[conversation_id]:
+                    labels_by_thread[conversation_id].append(label)
+
+        return dict(labels_by_thread)
+
+    def classify_thread_recommendation(
+        self,
+        thread: ConversationThread,
+        labels: list[str],
+        sender_summary: SenderSummary | None = None,
+    ) -> tuple[str, str]:
+        """Classify a thread as needing a reply or safe to ignore.
+
+        Args:
+            thread: Conversation thread metadata
+            labels: Detection labels attached to the thread
+
+        Returns:
+            Tuple of recommendation and human-readable reason
+        """
+        hard_ignore_labels = {
+            'financial_advisor',
+            'franchise_consultant',
+            'crypto_hustler',
+            'mlm',
+            'ai_generated',
+            'template',
+            'fake_personalization',
+            'role_confusion',
+        }
+        reply_worthy_labels = {
+            'recruiter',
+            'expert_network',
+            'angel_investor',
+        }
+        label_set = set(labels)
+        incoming_count = thread.get('incoming_count', 0)
+        latest_content = ''
+        if thread.get('messages'):
+            latest_content = (thread['messages'][-1].get('content', '') or '').lower()
+
+        low_signal_followup_phrases = (
+            'checking one last time',
+            'close the loop',
+            'just bumping this',
+            'bumping this',
+            'following up',
+            'quick follow up',
+            'quick follow-up',
+            'checking back',
+            'circling back',
+            'touching base',
+        )
+        concrete_context_phrases = (
+            'details you requested',
+            'send over',
+            'interview',
+            'availability',
+            'job description',
+            'role',
+            'opportunity',
+            'schedule',
+            'next step',
+        )
+
+        if label_set & hard_ignore_labels:
+            return 'safe_to_ignore', 'Spam or low-value outreach indicators detected'
+
+        if thread.get('has_response_from_me') and incoming_count > 0:
+            return 'needs_reply', 'Existing back-and-forth suggests an active conversation'
+
+        if (
+            sender_summary
+            and sender_summary.get('unanswered_conversation_count', 0) >= 2
+            and sender_summary.get('unanswered_message_count', 0) >= 3
+            and not (label_set & reply_worthy_labels)
+        ):
+            return 'safe_to_ignore', 'Repeated outreach from the same sender across multiple unanswered threads'
+
+        if 'time_request' in label_set and incoming_count >= 2:
+            return 'safe_to_ignore', 'Repeated unsolicited time requests without added context'
+
+        if label_set & reply_worthy_labels:
+            if '?' in latest_content or any(phrase in latest_content for phrase in concrete_context_phrases):
+                return 'needs_reply', 'Professional outreach with a concrete ask or follow-up'
+            return 'needs_reply', 'Potentially legitimate professional outreach'
+
+        if incoming_count >= 2 and any(phrase in latest_content for phrase in low_signal_followup_phrases):
+            return 'safe_to_ignore', 'Follow-up appears to be a generic bump without new signal'
+
+        if '?' in latest_content and not labels:
+            return 'needs_reply', 'Unclassified message contains a direct question'
+
+        if any(phrase in latest_content for phrase in concrete_context_phrases) and not labels:
+            return 'needs_reply', 'Message includes concrete context instead of a generic pitch'
+
+        if not labels and incoming_count <= 2:
+            return 'needs_reply', 'Unclassified outreach may be worth a quick review'
+
+        if incoming_count >= 3:
+            return 'safe_to_ignore', 'Persistent follow-up without strong positive signals'
+
+        return 'needs_reply', 'No strong spam indicators detected'
+
+    def get_thread_triage_queue(
+        self,
+        my_name: str | None = None,
+        include_responded: bool = False,
+    ) -> list[ThreadTriageItem]:
+        """Return scored thread triage items ranked by persistence and risk signals.
+
+        Args:
+            my_name: Optional user name override for distinguishing incoming vs outgoing
+            include_responded: Include threads that already received a response from you
+
+        Returns:
+            Ranked triage items suitable for console, export, or dashboard surfaces
+        """
+        threads = self.get_conversation_threads(my_name=my_name)
+        labels_by_thread = self.get_thread_labels()
+        label_scores = {
+            'time_request': 12,
+            'financial_advisor': 10,
+            'franchise_consultant': 9,
+            'expert_network': 8,
+            'angel_investor': 8,
+            'recruiter': 6,
+            'role_confusion': 5,
+            'fake_personalization': 6,
+            'template': 6,
+            'ai_generated': 6,
+            'crypto_hustler': 10,
+            'mlm': 12,
+        }
+
+        triage_items: list[ThreadTriageItem] = []
+        sender_summary_lookup = {
+            summary['sender']: summary
+            for summary in self.get_sender_summaries(my_name=my_name)
+            if summary.get('sender')
+        }
+        for thread in threads.values():
+            if not include_responded and thread.get('has_response_from_me'):
+                continue
+            if thread.get('incoming_count', 0) == 0:
+                continue
+
+            labels = labels_by_thread.get(thread['conversation_id'], [])
+            triage_score = thread.get('incoming_count', 0) * 10
+            triage_score += sum(label_scores.get(label, 0) for label in labels)
+            if not thread.get('has_response_from_me'):
+                triage_score += 5
+            recommendation, recommendation_reason = self.classify_thread_recommendation(
+                thread,
+                labels,
+                sender_summary=sender_summary_lookup.get(thread.get('primary_sender', '')),
+            )
+
+            latest_message_preview = ''
+            if thread.get('messages'):
+                latest_message_preview = thread['messages'][-1].get('content', '')[:200]
+
+            triage_items.append({
+                'conversation_id': thread['conversation_id'],
+                'conversation_title': thread.get('conversation_title', ''),
+                'primary_sender': thread.get('primary_sender', ''),
+                'incoming_count': thread.get('incoming_count', 0),
+                'message_count': thread.get('message_count', 0),
+                'has_response_from_me': thread.get('has_response_from_me', False),
+                'triage_score': triage_score,
+                'labels': labels,
+                'recommendation': recommendation,
+                'recommendation_reason': recommendation_reason,
+                'last_message_at': thread.get('last_message_at'),
+                'latest_message_preview': latest_message_preview,
+            })
+
+        triage_items.sort(
+            key=lambda item: (
+                item.get('triage_score', 0),
+                item.get('incoming_count', 0),
+                item.get('last_message_at') or datetime.min,
+            ),
+            reverse=True,
+        )
+        return triage_items
+
+    def get_filtered_thread_triage_queue(
+        self,
+        my_name: str | None = None,
+        labels: list[str] | None = None,
+        min_triage_score: int | None = None,
+        unanswered_only: bool = False,
+        recommendation: str | None = None,
+        sender: str | None = None,
+        llm_recommendation: str | None = None,
+        llm_intent: str | None = None,
+        sort_by: str = 'triage',
+    ) -> list[ThreadTriageItem]:
+        """Filter thread triage items for export and dashboard views."""
+        triage_items = self.get_thread_triage_queue(my_name=my_name, include_responded=True)
+        llm_signals = self.get_thread_llm_signals()
+        normalized_labels = {
+            label.strip().lower()
+            for label in (labels or [])
+            if label and label.strip()
+        }
+        recommendation_filter = recommendation.strip().lower() if recommendation else None
+        sender_filter = sender.strip() if sender else None
+        llm_recommendation_filter = llm_recommendation.strip().lower() if llm_recommendation else None
+        llm_intent_filter = llm_intent.strip().lower() if llm_intent else None
+        normalized_sort_by = (sort_by or 'triage').strip().lower()
+        llm_recommendation_rank = {
+            'priority': 4,
+            'consider': 3,
+            'respond': 2,
+            'ignore': 1,
+            '': 0,
+        }
+
+        filtered_items: list[ThreadTriageItem] = []
+        for item in triage_items:
+            llm_signal = llm_signals.get(item.get('conversation_id', ''), {})
+            enriched_item: ThreadTriageItem = {
+                **item,
+                'llm_recommendation': str(llm_signal.get('primary_recommendation', '')),
+                'llm_intent': str(llm_signal.get('primary_intent', '')),
+                'llm_analysis_count': int(llm_signal.get('analysis_count', 0)),
+                'llm_high_priority_count': int(llm_signal.get('high_priority_count', 0)),
+                'llm_max_authenticity_score': int(llm_signal.get('max_authenticity_score', 0)),
+            }
+
+            if unanswered_only and item.get('has_response_from_me'):
+                continue
+            if sender_filter and item.get('primary_sender') != sender_filter:
+                continue
+            if recommendation_filter and item.get('recommendation') != recommendation_filter:
+                continue
+            if min_triage_score is not None and item.get('triage_score', 0) < min_triage_score:
+                continue
+            if normalized_labels:
+                item_labels = {label.lower() for label in item.get('labels', [])}
+                if not (item_labels & normalized_labels):
+                    continue
+            if llm_recommendation_filter and enriched_item.get('llm_recommendation') != llm_recommendation_filter:
+                continue
+            if llm_intent_filter and enriched_item.get('llm_intent') != llm_intent_filter:
+                continue
+            filtered_items.append(enriched_item)
+
+        if normalized_sort_by == 'last_message':
+            filtered_items.sort(
+                key=lambda item: (
+                    item.get('last_message_at') or datetime.min,
+                    item.get('triage_score', 0),
+                ),
+                reverse=True,
+            )
+        elif normalized_sort_by == 'llm_recommendation':
+            filtered_items.sort(
+                key=lambda item: (
+                    llm_recommendation_rank.get(str(item.get('llm_recommendation', '')), 0),
+                    item.get('llm_high_priority_count', 0),
+                    item.get('llm_max_authenticity_score', 0),
+                    item.get('triage_score', 0),
+                    item.get('last_message_at') or datetime.min,
+                ),
+                reverse=True,
+            )
+
+        return filtered_items
 
     def analyze_time_requests(self, my_name: str | None = None) -> 'LinkedInMessageAnalyzer':
         """Identify messages that contain requests for time."""
@@ -558,36 +1023,43 @@ class LinkedInMessageAnalyzer:
         """Identify people who message multiple times without getting a response."""
         logger.info("Analyzing for repeat offenders...")
 
-        # First, identify conversations where I responded
-        for msg in self.messages:
-            if self._is_from_me(msg, my_name):
-                self.my_responses.add(msg['conversation_id'])
+        self.repeat_offenders = {}
+        threads = self.get_conversation_threads(my_name=my_name)
+        self.my_responses = {
+            thread['conversation_id']
+            for thread in threads.values()
+            if thread.get('has_response_from_me')
+        }
 
-        # Group incoming messages by sender
-        sender_messages: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for msg in self.messages:
-            if self._is_from_me(msg, my_name):
+        for summary in self.get_sender_summaries(my_name=my_name):
+            sender = summary.get('sender', '')
+            if not sender:
                 continue
-            sender = msg['from']
-            sender_messages[sender].append(msg)
+            if summary.get('message_count', 0) < 2 or summary.get('has_received_response'):
+                continue
 
-        # Find repeat offenders (2+ messages, no response from me)
-        for sender, messages in sender_messages.items():
-            if len(messages) >= 2:
-                # Check if I responded to any of their conversations
-                conv_ids = set(m['conversation_id'] for m in messages)
-                responded = bool(conv_ids & self.my_responses)
+            sender_messages: list[Message] = []
+            for conversation_id in summary.get('conversation_ids', []):
+                thread = threads.get(conversation_id)
+                if not thread:
+                    continue
+                sender_messages.extend(
+                    message
+                    for message in thread.get('messages', [])
+                    if not self._is_from_me(message, my_name) and message.get('from') == sender
+                )
 
-                if not responded:
-                    # Sort by date
-                    messages_sorted = sorted(messages, key=lambda x: x['date'] if x['date'] else datetime.min)
-                    self.repeat_offenders[sender] = {
-                        'messages': messages_sorted,
-                        'count': len(messages),
-                        'first_contact': messages_sorted[0]['date'],
-                        'last_contact': messages_sorted[-1]['date'],
-                        'responded': False,
-                    }
+            if len(sender_messages) < 2:
+                continue
+
+            messages_sorted = sorted(sender_messages, key=self._message_sort_key)
+            self.repeat_offenders[sender] = {
+                'messages': messages_sorted,
+                'count': len(messages_sorted),
+                'first_contact': messages_sorted[0].get('date'),
+                'last_contact': messages_sorted[-1].get('date'),
+                'responded': False,
+            }
 
         logger.info(f"Found {len(self.repeat_offenders)} repeat offenders (2+ messages, no response)")
         return self
@@ -770,6 +1242,12 @@ class LinkedInMessageAnalyzer:
             logger.warning("No LLM analyzer configured, skipping LLM analysis")
             return self
 
+        self.llm_run_config = {
+            'max_messages': max_messages,
+            'message_filter': message_filter,
+            'selected_message_count': 0,
+        }
+
         # Select messages to analyze
         if message_filter == 'time_requests':
             messages_to_analyze = self.time_requests
@@ -799,6 +1277,8 @@ class LinkedInMessageAnalyzer:
             logger.warning("No messages to analyze with LLM")
             return self
 
+        self.llm_run_config['selected_message_count'] = min(len(messages_to_analyze), max_messages)
+
         logger.info(f"Running LLM analysis on {min(len(messages_to_analyze), max_messages)} messages...")
 
         def progress_callback(current: int, total: int) -> None:
@@ -813,6 +1293,130 @@ class LinkedInMessageAnalyzer:
 
         logger.info(f"LLM analysis complete: {len(self.llm_analyses)} messages analyzed")
         return self
+
+    def get_llm_run_info(self) -> dict[str, Any]:
+        """Return a structured summary of the current LLM configuration and results."""
+        if not self.llm_analyzer:
+            return {
+                'enabled': False,
+                'provider': None,
+                'provider_type': None,
+                'model': None,
+                'default_model': None,
+                'description': '',
+                'recommended_models': [],
+                'message_filter': None,
+                'max_messages': None,
+                'selected_message_count': 0,
+                'analyses_completed': 0,
+                'analyses_failed': 0,
+                'high_priority_count': 0,
+                'recommendations': {},
+                'intents': {},
+            }
+
+        provider_info = LLMAnalyzer.get_provider_info().get(self.llm_analyzer.provider_name, {})
+        valid_analyses = [analysis for analysis in self.llm_analyses if 'error' not in analysis]
+        recommendation_counts = Counter(
+            analysis.get('recommendation', 'unknown')
+            for analysis in valid_analyses
+        )
+        intent_counts = Counter(
+            analysis.get('intent', 'unknown')
+            for analysis in valid_analyses
+        )
+
+        return {
+            'enabled': True,
+            'provider': self.llm_analyzer.provider_name,
+            'provider_type': provider_info.get('provider_type'),
+            'model': self.llm_analyzer.model,
+            'default_model': provider_info.get('default_model'),
+            'description': provider_info.get('description', ''),
+            'recommended_models': provider_info.get('recommended_models', []),
+            'message_filter': self.llm_run_config.get('message_filter'),
+            'max_messages': self.llm_run_config.get('max_messages'),
+            'selected_message_count': self.llm_run_config.get('selected_message_count', len(self.llm_analyses)),
+            'analyses_completed': len(valid_analyses),
+            'analyses_failed': len(self.llm_analyses) - len(valid_analyses),
+            'high_priority_count': len(self.get_high_priority_messages()),
+            'recommendations': dict(recommendation_counts),
+            'intents': dict(intent_counts),
+        }
+
+    def get_thread_llm_signals(self) -> dict[str, dict[str, Any]]:
+        """Aggregate LLM analyses into per-thread signals for exports and UI filters."""
+        if not self.llm_analyses:
+            return {}
+
+        recommendation_rank = {
+            'priority': 4,
+            'consider': 3,
+            'respond': 2,
+            'ignore': 1,
+        }
+        grouped: dict[str, dict[str, Any]] = {}
+
+        for analysis in self.llm_analyses:
+            if 'error' in analysis:
+                continue
+
+            conversation_id = str(analysis.get('conversation_id', '')).strip()
+            if not conversation_id:
+                continue
+
+            signal = grouped.setdefault(
+                conversation_id,
+                {
+                    'recommendations': Counter(),
+                    'intents': Counter(),
+                    'analysis_count': 0,
+                    'high_priority_count': 0,
+                    'max_authenticity_score': 0,
+                },
+            )
+
+            recommendation = str(analysis.get('recommendation', 'unknown')).strip().lower()
+            intent = str(analysis.get('intent', 'unknown')).strip().lower()
+            authenticity_score = int(analysis.get('authenticity_score', 0) or 0)
+
+            signal['recommendations'][recommendation] += 1
+            signal['intents'][intent] += 1
+            signal['analysis_count'] += 1
+            signal['max_authenticity_score'] = max(signal['max_authenticity_score'], authenticity_score)
+            if recommendation in {'priority', 'consider'}:
+                signal['high_priority_count'] += 1
+
+        summaries: dict[str, dict[str, Any]] = {}
+        for conversation_id, signal in grouped.items():
+            recommendations = signal['recommendations']
+            intents = signal['intents']
+
+            primary_recommendation = ''
+            if recommendations:
+                primary_recommendation = max(
+                    recommendations.items(),
+                    key=lambda item: (recommendation_rank.get(item[0], 0), item[1], item[0]),
+                )[0]
+
+            primary_intent = ''
+            if intents:
+                primary_intent = max(
+                    intents.items(),
+                    key=lambda item: (item[1], item[0]),
+                )[0]
+
+            summaries[conversation_id] = {
+                'primary_recommendation': primary_recommendation,
+                'primary_intent': primary_intent,
+                'analysis_count': signal['analysis_count'],
+                'high_priority_count': signal['high_priority_count'],
+                'max_authenticity_score': signal['max_authenticity_score'],
+                'recommendations': dict(recommendations),
+                'intents': dict(intents),
+            }
+
+        return summaries
 
     def get_llm_summary(self) -> str:
         """Get a formatted summary of LLM analysis results."""
@@ -1011,10 +1615,54 @@ class LinkedInMessageAnalyzer:
         reporter = ConsoleReporter(weeks_back=weeks_back)
         return reporter.generate_post_stats(self)
 
-    def export_to_json(self, output_path: str) -> None:
+    def export_to_json(
+        self,
+        output_path: str,
+        labels: list[str] | None = None,
+        min_triage_score: int | None = None,
+        unanswered_only: bool = False,
+        recommendation: str | None = None,
+        llm_recommendation: str | None = None,
+        llm_intent: str | None = None,
+        sort_by: str = 'triage',
+    ) -> None:
         """Export analysis results to JSON for further processing."""
         from lib.reporters import JSONReporter
-        reporter = JSONReporter(output_path=output_path)
+        reporter = JSONReporter(
+            output_path=output_path,
+            labels=labels,
+            min_triage_score=min_triage_score,
+            unanswered_only=unanswered_only,
+            recommendation=recommendation,
+            llm_recommendation=llm_recommendation,
+            llm_intent=llm_intent,
+            sort_by=sort_by,
+        )
+        reporter.generate(self)
+
+    def export_to_csv(
+        self,
+        output_path: str,
+        labels: list[str] | None = None,
+        min_triage_score: int | None = None,
+        unanswered_only: bool = False,
+        recommendation: str | None = None,
+        llm_recommendation: str | None = None,
+        llm_intent: str | None = None,
+        sort_by: str = 'triage',
+    ) -> None:
+        """Export thread-aware analysis results to CSV for spreadsheet workflows."""
+        from lib.reporters import CSVReporter
+        reporter = CSVReporter(
+            output_path=output_path,
+            labels=labels,
+            min_triage_score=min_triage_score,
+            unanswered_only=unanswered_only,
+            recommendation=recommendation,
+            llm_recommendation=llm_recommendation,
+            llm_intent=llm_intent,
+            sort_by=sort_by,
+        )
         reporter.generate(self)
 
     def get_hall_of_shame(self, top_n: int = 10) -> list[dict[str, Any]]:

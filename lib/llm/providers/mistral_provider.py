@@ -31,6 +31,9 @@ class MistralProvider(LLMProvider):
     default_model = "mistral-small-latest"
     env_var = "MISTRAL_API_KEY"
     requires_api_key = True
+    description = "Mistral-hosted chat models with stable latest aliases and simple API-key setup."
+    setup_url = "https://console.mistral.ai/api-keys/"
+    recommended_models = ("mistral-small-latest", "mistral-medium-latest")
 
     def initialize(self) -> None:
         """Initialize the Mistral client."""
@@ -118,4 +121,4 @@ class MistralProvider(LLMProvider):
 
     @classmethod
     def get_install_instructions(cls) -> str:
-        return "pip install mistralai>=1.0.0"
+        return "pip install mistralai>=1.5.0"

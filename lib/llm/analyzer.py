@@ -311,8 +311,11 @@ Respond with JSON only:
                     sender_name=msg.get('from', ''),
                     sender_context=msg.get('conversation_title', ''),
                 )
+                result['conversation_id'] = msg.get('conversation_id', '')
+                result['conversation_title'] = msg.get('conversation_title', '')
                 result['message_date'] = msg.get('date')
                 result['message_from'] = msg.get('from')
+                result['message_preview'] = (msg.get('content', '') or '')[:160]
                 results.append(result)
 
                 if 'error' in result:
@@ -325,8 +328,11 @@ Respond with JSON only:
                 results.append({
                     'error': 'Quota exhausted',
                     'quota_exhausted': True,
+                    'conversation_id': msg.get('conversation_id', ''),
+                    'conversation_title': msg.get('conversation_title', ''),
                     'message_date': msg.get('date'),
                     'message_from': msg.get('from'),
+                    'message_preview': (msg.get('content', '') or '')[:160],
                 })
 
                 if stop_on_quota_exhausted:

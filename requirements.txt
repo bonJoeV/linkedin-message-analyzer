@@ -3,12 +3,12 @@ python-dateutil>=2.8.0    # Better date parsing
 chardet>=5.0.0            # Encoding detection
 
 # Optional: LLM-powered analysis (install one or more)
-# openai>=1.60.0            # For --llm openai
-# anthropic>=0.76.0         # For --llm anthropic
-# ollama>=0.6.0             # For --llm ollama (local, free!)
-# google-genai>=1.0.0       # For --llm gemini (replaces deprecated google-generativeai)
-# groq>=1.0.0               # For --llm groq (fast inference)
-# mistralai>=1.5.0          # For --llm mistral
+# openai>=1.60.0            # For --llm openai (default: gpt-4.1-mini)
+# anthropic>=0.76.0         # For --llm anthropic (default: claude-3-5-haiku-latest)
+# ollama>=0.6.0             # For --llm ollama (default: llama3.2, local and free)
+# google-genai>=1.0.0       # For --llm gemini (default: gemini-2.5-flash)
+# groq>=1.0.0               # For --llm groq (default: llama-3.1-8b-instant)
+# mistralai>=1.5.0          # For --llm mistral (default: mistral-small-latest)
 
 # Optional: Advanced LLM features
 # numpy>=1.24.0             # For message clustering

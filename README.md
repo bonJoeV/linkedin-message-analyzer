@@ -70,7 +70,11 @@ python linkedin_message_analyzer.py messages.csv --post-stats
 
 # Export results
 python linkedin_message_analyzer.py messages.csv --export-json results.json
+python linkedin_message_analyzer.py messages.csv --export-csv threads.csv
 python linkedin_message_analyzer.py messages.csv --export-html report.html
+
+# Export only high-score unanswered recruiter threads
+python linkedin_message_analyzer.py messages.csv --export-csv triage.csv --export-unanswered-only --export-label recruiter --export-min-triage-score 25
 ```
 
 ### Advanced Analysis
@@ -94,33 +98,45 @@ python linkedin_message_analyzer.py current.csv --compare previous.csv
 For deeper analysis with AI, choose from 6 providers:
 
 ```bash
-# OpenAI (requires OPENAI_API_KEY)
+# OpenAI (requires OPENAI_API_KEY, recommended package: openai>=1.60.0)
 python linkedin_message_analyzer.py messages.csv --llm openai
 
-# Anthropic Claude (requires ANTHROPIC_API_KEY)
+# Anthropic Claude (requires ANTHROPIC_API_KEY, recommended package: anthropic>=0.76.0)
 python linkedin_message_analyzer.py messages.csv --llm anthropic
 
 # Ollama - FREE local analysis! No API key needed
 python linkedin_message_analyzer.py messages.csv --llm ollama
+python linkedin_message_analyzer.py messages.csv --llm ollama --ollama-url http://localhost:11434
 
-# Google Gemini (requires GOOGLE_API_KEY)
+# Google Gemini (requires GOOGLE_API_KEY, recommended package: google-genai>=1.0.0)
 python linkedin_message_analyzer.py messages.csv --llm gemini
 
-# Groq - blazing fast (requires GROQ_API_KEY)
+# Groq - blazing fast (requires GROQ_API_KEY, recommended package: groq>=1.0.0)
 python linkedin_message_analyzer.py messages.csv --llm groq
 
-# Mistral (requires MISTRAL_API_KEY)
+# Mistral (requires MISTRAL_API_KEY, recommended package: mistralai>=1.5.0)
 python linkedin_message_analyzer.py messages.csv --llm mistral
 
 # List all providers and setup instructions
 python linkedin_message_analyzer.py --list-llm-providers
 ```
 
+Current defaults and recommended models:
+
+- OpenAI: default `gpt-4.1-mini`, also good: `gpt-4o-mini`
+- Anthropic: default `claude-3-5-haiku-latest`, also good: `claude-3-7-sonnet-latest`
+- Gemini: default `gemini-2.5-flash`, also good: `gemini-2.0-flash`
+- Groq: default `llama-3.1-8b-instant`, also good: `llama-3.3-70b-versatile`
+- Mistral: default `mistral-small-latest`, also good: `mistral-medium-latest`
+- Ollama: default `llama3.2`, also good locally: `qwen2.5:7b`
+
 LLM analysis adds:
 - Intent classification (sales pitch, recruiting, genuine, etc.)
 - Authenticity scoring (1-10)
 - Manipulation tactic detection
 - Personalized recommendations (ignore/respond/priority)
+
+You can now set LLM defaults in `config.json` and override them with CLI flags. Precedence is: CLI flags > `--config` values > provider defaults.
 
 ### Advanced LLM Features
 
@@ -148,6 +164,9 @@ Available reply tones: `polite`, `firm`, `playful`, `deadpan`, `corporate_speak`
 Launch a retro Commodore 64-styled web dashboard:
 
 ```bash
+# Install the optional dashboard dependency once
+pip install flask
+
 # Start the dashboard
 python linkedin_message_analyzer.py messages.csv --web
 
@@ -156,6 +175,21 @@ python linkedin_message_analyzer.py messages.csv --web --web-port 3000
 ```
 
 Then open `http://localhost:6502` in your browser for a nostalgia trip through your inbox metrics.
+
+The dashboard now includes a thread triage queue, sender drill-downs, and filter controls for labels, recommendations, unanswered-only views, and minimum triage scores.
+It also lets you export the current filtered view to CSV or JSON and copy a selected thread summary directly from the detail pane.
+If LLM analysis is enabled, the dashboard also exposes thread-level LLM recommendation and intent filters plus an LLM-aware sort mode.
+
+Current dashboard filter query params are:
+
+- `label`
+- `recommendation`
+- `min_score`
+- `sender`
+- `unanswered_only`
+- `llm_recommendation`
+- `llm_intent`
+- `sort_by` with `triage`, `llm_recommendation`, or `last_message`
 
 ### Fun Extras
 
@@ -239,11 +273,60 @@ Copy `config_example.json` to `config.json` and customize:
 {
   "user_profile": {
     "name": "Your Name",
-    "industries": ["tech"],
-    "ignore_senders": ["Your Colleague"]
+      "industries": ["tech"],
+      "ignore_senders": ["Your Colleague"]
+   },
+   "llm": {
+      "provider": "ollama",
+      "model": "qwen2.5:7b",
+      "max_messages": 25,
+      "filter": "time_requests",
+      "provider_options": {
+         "base_url": "http://localhost:11434"
+      }
   }
 }
 ```
+
+### LLM Output Surfaces
+
+When LLM analysis runs, the tool now surfaces that metadata consistently across outputs:
+
+- JSON export includes a top-level `llm` block with provider, model, message filter, selected count, recommendation totals, and intent totals.
+- JSON thread items include `llm_recommendation`, `llm_intent`, and `llm_analysis_count` when a thread has LLM coverage.
+- CSV export includes `llm_recommendation`, `llm_intent`, and `llm_analysis_count` columns.
+- The web dashboard shows both run-level LLM settings and per-thread LLM signals.
+
+### Live Smoke Tests
+
+The repo includes an opt-in live smoke test for real providers in [tests/test_llm_live_smoke.py](tests/test_llm_live_smoke.py).
+
+Enable it locally with environment variables:
+
+```bash
+set RUN_LLM_SMOKE_TESTS=1
+set LLM_SMOKE_PROVIDERS=openai,groq
+set OPENAI_API_KEY=...
+set GROQ_API_KEY=...
+python -m unittest tests.test_llm_live_smoke
+```
+
+Optional variables:
+
+- `LLM_SMOKE_MODEL_OPENAI`, `LLM_SMOKE_MODEL_ANTHROPIC`, etc. for provider-specific model overrides
+- `OLLAMA_SMOKE_TEST=1` to opt into Ollama smoke tests
+- `OLLAMA_BASE_URL=http://localhost:11434` for custom Ollama endpoints
+
+A manual GitHub Actions workflow is also included at [.github/workflows/llm-live-smoke.yml](.github/workflows/llm-live-smoke.yml) for credentialed smoke-test runs.
+
+`--config` now supports:
+
+- `user_profile`: the same shape accepted by `UserProfile.from_dict()`
+- `llm.provider`: one of `openai`, `anthropic`, `ollama`, `gemini`, `groq`, `mistral`
+- `llm.model`: explicit model override
+- `llm.max_messages`: default max messages for LLM analysis
+- `llm.filter`: `time_requests`, `suspicious`, or `all`
+- `llm.provider_options.base_url`: provider-specific settings such as Ollama's base URL
 
 ## Project Structure
 

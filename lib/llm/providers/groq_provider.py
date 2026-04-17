@@ -36,6 +36,12 @@ class GroqProvider(LLMProvider):
     default_model = "llama-3.1-8b-instant"
     env_var = "GROQ_API_KEY"
     requires_api_key = True
+    description = "Very fast hosted inference, useful for lower-latency classification runs."
+    setup_url = "https://console.groq.com/keys"
+    recommended_models = ("llama-3.1-8b-instant", "llama-3.3-70b-versatile")
+    notes = (
+        "Free-tier usage commonly hits rate limits, so this provider benefits most from the built-in backoff logic.",
+    )
 
     def initialize(self) -> None:
         """Initialize the Groq client."""
@@ -179,4 +185,4 @@ class GroqProvider(LLMProvider):
 
     @classmethod
     def get_install_instructions(cls) -> str:
-        return "pip install groq>=0.11.0"
+        return "pip install groq>=1.0.0"

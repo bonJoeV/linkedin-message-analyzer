@@ -23,6 +23,9 @@ from lib.types import (
     Message,
     TimeRequest,
     FlatteryMessage,
+    ConversationThread,
+    SenderSummary,
+    ThreadTriageItem,
 )
 from lib.constants import (
     LINKEDIN_INMAIL_LIMIT,
@@ -73,6 +76,9 @@ __all__ = [
     'Message',
     'TimeRequest',
     'FlatteryMessage',
+    'ConversationThread',
+    'SenderSummary',
+    'ThreadTriageItem',
     # Configuration
     'INDUSTRY_PRESETS',
     # LinkedIn limits

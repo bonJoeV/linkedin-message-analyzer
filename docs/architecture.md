@@ -138,7 +138,21 @@ class LLMAnalyzer:
     def analyze_batch(messages, progress_callback) -> list[dict]
 ```
 
-**Providers:** OpenAI, Anthropic (more planned)
+**Providers:** OpenAI, Anthropic, Gemini, Groq, Mistral, Ollama
+
+The provider layer is implemented as a registry-backed plugin system in `lib/llm/base.py`.
+Each provider class declares:
+
+- `default_model`
+- `recommended_models`
+- `env_var`
+- `setup_url`
+- install instructions / minimum package floor
+- optional provider-specific config fields such as Ollama `base_url`
+
+This metadata is surfaced through `ProviderRegistry.get_provider_info()` and reused by the CLI for `--list-llm-providers`, missing-key guidance, and config-file support.
+
+The JSON config loader in `lib/config.py` also supports an `llm` block, so users can define default provider/model/max/filter settings in `config.json` and override them via CLI flags.
 
 **Returns:**
 ```python
@@ -218,7 +232,8 @@ class MyReporter:
 
 ### 3. LLM Providers
 
-Add new providers by extending the LLM module (plugin system planned).
+Add new providers by subclassing `LLMProvider` and registering them with `ProviderRegistry`.
+Populate the provider metadata fields so setup guidance, model recommendations, and config hints appear automatically in CLI and docs surfaces.
 
 ### 4. Analysis Methods
 

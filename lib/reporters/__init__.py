@@ -15,6 +15,7 @@ Example - Registering custom reporters:
 """
 
 from lib.reporters.console import ConsoleReporter
+from lib.reporters.csv_export import CSVReporter
 from lib.reporters.json_export import JSONReporter
 from lib.reporters.html import HTMLReporter, generate_html_report
 from lib.reporters.stats import StatsDashboard, generate_stats_dashboard
@@ -22,6 +23,7 @@ from lib.reporters.stats import StatsDashboard, generate_stats_dashboard
 # Reporter registry for extensibility
 _reporter_registry: dict[str, type] = {
     'console': ConsoleReporter,
+    'csv': CSVReporter,
     'json': JSONReporter,
     'html': HTMLReporter,
     'stats': StatsDashboard,
@@ -70,6 +72,7 @@ def list_reporters() -> list[str]:
 
 __all__ = [
     'ConsoleReporter',
+    'CSVReporter',
     'JSONReporter',
     'HTMLReporter',
     'generate_html_report',

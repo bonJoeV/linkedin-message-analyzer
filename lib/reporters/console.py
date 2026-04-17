@@ -116,6 +116,11 @@ class ConsoleReporter:
         # Repeat offenders section
         self._print_repeat_offenders(analyzer)
 
+        # Sender rollups and unanswered threads
+        self._print_sender_triage(analyzer)
+        self._print_thread_triage(analyzer)
+        self._print_unanswered_threads(analyzer)
+
         # Time patterns section
         self._print_time_patterns(analyzer)
 
@@ -217,6 +222,81 @@ class ConsoleReporter:
                 print(f"{anon_sender[:29]:<30} {data['count']:<8} {first:<12} {last}")
         else:
             print("No repeat offenders found.")
+
+    def _print_sender_triage(self, analyzer: 'LinkedInMessageAnalyzer') -> None:
+        """Print sender-level rollups for inbox triage."""
+        print("\n" + "-" * 70)
+        print("SENDER TRIAGE")
+        print("-" * 70)
+
+        sender_summaries = analyzer.get_sender_summaries()
+        actionable_summaries = [
+            summary for summary in sender_summaries
+            if summary.get('unanswered_message_count', 0) > 0
+        ]
+
+        if not actionable_summaries:
+            print("No unanswered sender activity found.")
+            return
+
+        print(f"{'Sender':<25} {'Threads':<8} {'Unanswered':<12} {'Last Contact'}")
+        print("-" * 70)
+        for summary in actionable_summaries[:10]:
+            last_contact = summary['last_contact'].strftime('%Y-%m-%d') if summary.get('last_contact') else 'N/A'
+            sender = safe_str(anonymize_name(summary['sender']))
+            print(
+                f"{sender[:24]:<25} "
+                f"{summary['conversation_count']:<8} "
+                f"{summary['unanswered_message_count']:<12} "
+                f"{last_contact}"
+            )
+
+    def _print_unanswered_threads(self, analyzer: 'LinkedInMessageAnalyzer') -> None:
+        """Print the most persistent unanswered threads."""
+        print("\n" + "-" * 70)
+        print("UNANSWERED THREADS")
+        print("-" * 70)
+
+        unanswered_threads = analyzer.get_unanswered_threads()
+        if not unanswered_threads:
+            print("No persistent unanswered threads found.")
+            return
+
+        for thread in unanswered_threads[:5]:
+            sender = safe_str(anonymize_name(thread.get('primary_sender', 'Unknown')))
+            title = safe_str((thread.get('conversation_title') or 'Untitled conversation')[:40])
+            last_contact = thread['last_message_at'].strftime('%Y-%m-%d') if thread.get('last_message_at') else 'N/A'
+            latest_message = ''
+            if thread.get('messages'):
+                latest_message = thread['messages'][-1].get('content', '')[:100].replace('\n', ' ')
+
+            print(f"\n{sender} | {thread.get('incoming_count', 0)} incoming | last contact {last_contact}")
+            print(f"  Title: {title}")
+            if latest_message:
+                print(f"  Latest: {safe_str(latest_message)}")
+
+    def _print_thread_triage(self, analyzer: 'LinkedInMessageAnalyzer') -> None:
+        """Print scored thread triage items for quickest inbox review."""
+        print("\n" + "-" * 70)
+        print("THREAD TRIAGE QUEUE")
+        print("-" * 70)
+
+        triage_items = analyzer.get_thread_triage_queue()
+        if not triage_items:
+            print("No triage candidates found.")
+            return
+
+        print(f"{'Sender':<25} {'Score':<8} {'Incoming':<10} {'Labels'}")
+        print("-" * 70)
+        for item in triage_items[:10]:
+            sender = safe_str(anonymize_name(item.get('primary_sender', 'Unknown')))
+            labels = ', '.join(item.get('labels', [])) or 'uncategorized'
+            print(
+                f"{sender[:24]:<25} "
+                f"{item.get('triage_score', 0):<8} "
+                f"{item.get('incoming_count', 0):<10} "
+                f"{safe_str(labels[:25])}"
+            )
 
     def _print_time_patterns(self, analyzer: 'LinkedInMessageAnalyzer') -> None:
         """Print time patterns section."""

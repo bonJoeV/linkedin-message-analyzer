@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from datetime import datetime
 
+from lib.llm import LLMAnalyzer
+
 
 def parse_keys_file(keys_file: str) -> dict[str, str]:
     """Parse the keys file with format 'provider | key'.
@@ -41,15 +43,14 @@ def parse_keys_file(keys_file: str) -> dict[str, str]:
 
 def get_env_var_for_provider(provider: str) -> str:
     """Get the environment variable name for a provider."""
-    env_vars = {
-        'openai': 'OPENAI_API_KEY',
-        'anthropic': 'ANTHROPIC_API_KEY',
-        'gemini': 'GOOGLE_API_KEY',
-        'groq': 'GROQ_API_KEY',
-        'mistral': 'MISTRAL_API_KEY',
-        'ollama': None,  # No key needed
-    }
-    return env_vars.get(provider)
+    provider_info = LLMAnalyzer.get_provider_info().get(provider.lower(), {})
+    env_var = provider_info.get('env_var')
+    return env_var if isinstance(env_var, str) else None
+
+
+def get_available_providers() -> list[str]:
+    """Get all registered provider names from the provider registry."""
+    return sorted(LLMAnalyzer.list_providers())
 
 
 def run_analyzer(
@@ -223,12 +224,22 @@ def main():
     # Parse keys
     keys = parse_keys_file(args.keys)
     print(f"\nFound {len(keys)} providers in keys file: {', '.join(keys.keys())}")
+    available_providers = get_available_providers()
 
     # Determine which providers to test
     if args.providers:
         providers_to_test = [p.lower() for p in args.providers]
     else:
         providers_to_test = list(keys.keys())
+
+    unknown_providers = [p for p in providers_to_test if p not in available_providers]
+    if unknown_providers:
+        print(
+            "Error: Unknown providers requested: "
+            f"{', '.join(unknown_providers)}. "
+            f"Available providers: {', '.join(available_providers)}"
+        )
+        return 1
 
     # Create output directory if needed
     output_dir = Path(args.output_dir)

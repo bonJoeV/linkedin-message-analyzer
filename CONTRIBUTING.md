@@ -218,7 +218,9 @@ python linkedin_message_analyzer.py samples/sample_tech.csv --llm openai
 
 # Test specific output
 python linkedin_message_analyzer.py samples/sample_tech.csv --export-json test.json
+python linkedin_message_analyzer.py samples/sample_tech.csv --export-csv test.csv
 python linkedin_message_analyzer.py samples/sample_tech.csv --export-html test.html
+python linkedin_message_analyzer.py samples/sample_tech.csv --export-csv filtered.csv --export-unanswered-only --export-label time_request --export-min-triage-score 25
 ```
 
 ### Testing Patterns

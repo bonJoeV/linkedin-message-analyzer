@@ -29,9 +29,15 @@ class GeminiProvider(LLMProvider):
     """
 
     name = "gemini"
-    default_model = "gemini-2.0-flash"
+    default_model = "gemini-2.5-flash"
     env_var = "GOOGLE_API_KEY"
     requires_api_key = True
+    description = "Google Gemini models with the newer google-genai SDK preferred over the legacy SDK."
+    setup_url = "https://aistudio.google.com/app/apikey"
+    recommended_models = ("gemini-2.5-flash", "gemini-2.0-flash")
+    notes = (
+        "Prefers google-genai and falls back to google-generativeai when necessary.",
+    )
 
     def initialize(self) -> None:
         """Initialize the Gemini client."""

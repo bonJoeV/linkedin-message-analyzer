@@ -64,8 +64,10 @@ Enable AI-powered analysis. See [llm.md](llm.md).
 ```python
 from lib import LLMAnalyzer
 
-llm = LLMAnalyzer(provider='openai', api_key='sk-...')
+llm = LLMAnalyzer(provider='openai', api_key='sk-...', model='gpt-4.1-mini')
 ```
+
+If you prefer config-driven defaults, `config.json` now supports an `llm` block with `provider`, `model`, `max_messages`, `filter`, and `provider_options`.
 
 ### Pattern System
 
@@ -153,7 +155,7 @@ print(f"Time requests: {len(analyzer.time_requests)}")
 ```python
 from lib import LinkedInMessageAnalyzer, LLMAnalyzer
 
-llm = LLMAnalyzer(provider='openai')
+llm = LLMAnalyzer(provider='openai', model='gpt-4.1-mini')
 analyzer = LinkedInMessageAnalyzer('messages.csv', llm_analyzer=llm)
 analyzer.load_messages().run_all_analyses()
 
@@ -162,3 +164,5 @@ for analysis in analyzer.llm_analyses:
     print(f"Intent: {analysis['intent']}")
     print(f"Authenticity: {analysis['authenticity_score']}/10")
 ```
+
+For provider setup and current recommended models, see [llm.md](llm.md).

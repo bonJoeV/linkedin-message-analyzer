@@ -30,6 +30,15 @@ class OllamaProvider(LLMProvider):
     default_model = "llama3.2"
     env_var = ""  # No API key needed
     requires_api_key = False
+    description = "Local inference with no API key requirement and configurable server base URL."
+    setup_url = "https://ollama.com/download"
+    recommended_models = ("llama3.2", "qwen2.5:7b")
+    config_fields = (
+        ("base_url", "Ollama server base URL, for example http://localhost:11434"),
+    )
+    notes = (
+        "Pull the configured model locally before running analysis.",
+    )
 
     def __init__(
         self,
@@ -114,7 +123,7 @@ class OllamaProvider(LLMProvider):
     @classmethod
     def get_install_instructions(cls) -> str:
         return (
-            "1. Install Ollama: https://ollama.ai\n"
-            "2. pip install ollama\n"
+            "1. Install Ollama: https://ollama.com/download\n"
+            "2. pip install ollama>=0.6.0\n"
             "3. Pull a model: ollama pull llama3.2"
         )

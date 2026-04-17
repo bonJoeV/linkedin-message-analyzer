@@ -5,22 +5,12 @@ import logging
 import os
 import sys
 
-# API key signup URLs for each provider
-LLM_PROVIDER_URLS = {
-    'openai': 'https://platform.openai.com/api-keys',
-    'anthropic': 'https://console.anthropic.com/settings/keys',
-    'gemini': 'https://aistudio.google.com/app/apikey',
-    'groq': 'https://console.groq.com/keys',
-    'mistral': 'https://console.mistral.ai/api-keys/',
-    'ollama': 'https://ollama.com/download (local install, no key needed)',
-}
-
 from lib.exceptions import (
     FileLoadError,
     InvalidCSVError,
     ConfigurationError,
 )
-from lib.constants import DEFAULT_WEEKS_BACK
+from lib.constants import DEFAULT_WEEKS_BACK, LLM_DEFAULT_MAX_MESSAGES
 from lib.config import setup_logging, load_config
 from lib.profile import UserProfile, INDUSTRY_PRESETS
 from lib.llm import LLMAnalyzer
@@ -35,6 +25,147 @@ from lib.reverse import ReverseAnalyzer
 from lib.comparison import ComparisonAnalyzer
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_LLM_FILTER = 'time_requests'
+
+
+def _format_provider_listing() -> str:
+    """Format provider metadata sourced from the provider registry."""
+    provider_info = LLMAnalyzer.get_provider_info()
+    if not provider_info:
+        return "\nNo LLM providers registered.\n"
+
+    name_width = max(len(name) for name in provider_info)
+    type_width = max(len(str(info.get('provider_type', ''))) for info in provider_info.values())
+    model_width = max(len(str(info.get('default_model', ''))) for info in provider_info.values())
+
+    lines = [
+        "",
+        "=" * 80,
+        "AVAILABLE LLM PROVIDERS",
+        "=" * 80,
+        f"  {'Provider':<{name_width}}  {'Type':<{type_width}}  {'Default model':<{model_width}}  API key",
+        f"  {'-' * name_width}  {'-' * type_width}  {'-' * model_width}  {'-' * 20}",
+    ]
+
+    for name, info in sorted(provider_info.items()):
+        api_key_display = info.get('env_var') if info.get('requires_api_key') else 'none'
+        lines.append(
+            f"  {name:<{name_width}}  {str(info.get('provider_type', '')):<{type_width}}  "
+            f"{str(info.get('default_model', '')):<{model_width}}  {api_key_display}"
+        )
+
+    for name, info in sorted(provider_info.items()):
+        lines.extend([
+            "",
+            f"  {name.upper()}",
+            f"    Type: {info.get('provider_type', 'unknown')}",
+        ])
+        if info.get('description'):
+            lines.append(f"    Summary: {info['description']}")
+        lines.append(f"    Default model: {info['default_model']}")
+
+        recommended_models = info.get('recommended_models', [])
+        if recommended_models:
+            lines.append(f"    Recommended models: {', '.join(recommended_models)}")
+
+        if info.get('requires_api_key'):
+            lines.append(f"    Env var: {info['env_var']}")
+            if info.get('setup_url'):
+                lines.append(f"    Get key: {info['setup_url']}")
+        elif info.get('setup_url'):
+            lines.append(f"    Setup: {info['setup_url']}")
+
+        for field in info.get('config_fields', []):
+            lines.append(f"    Config: {field['name']} - {field['description']}")
+        for note in info.get('notes', []):
+            lines.append(f"    Note: {note}")
+
+        install = str(info['install']).replace('\n', '\n             ')
+        lines.append(f"    Install: {install}")
+
+    lines.extend([
+        "",
+        "-" * 80,
+        "QUICK START:",
+        "-" * 80,
+        "  Free (local):  --llm ollama",
+        "  Fast & cheap:  --llm groq    (set GROQ_API_KEY)",
+        "  Best quality:  --llm anthropic (set ANTHROPIC_API_KEY)",
+        "",
+        "Example:",
+        "  set GROQ_API_KEY=your-key-here",
+        "  python linkedin_message_analyzer.py messages.csv --llm groq --summarize",
+        "",
+    ])
+    return '\n'.join(lines)
+
+
+def _resolve_user_profile(args: argparse.Namespace, config: dict[str, object]) -> UserProfile | None:
+    """Build a user profile from CLI flags and config, with CLI taking precedence."""
+    if args.profile:
+        logger.info(f"Loading user profile from {args.profile}")
+        return UserProfile.from_json_file(args.profile)
+
+    config_profile = config.get('user_profile') if isinstance(config.get('user_profile'), dict) else {}
+    if not isinstance(config_profile, dict):
+        config_profile = {}
+
+    profile_data = dict(config_profile)
+    if args.my_name is not None:
+        profile_data['name'] = args.my_name
+    if args.industries is not None:
+        profile_data['industries'] = args.industries
+    if args.ignore_senders is not None:
+        profile_data['ignore_senders'] = args.ignore_senders
+
+    if not profile_data:
+        return None
+
+    return UserProfile.from_dict(profile_data)
+
+
+def _resolve_llm_settings(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> dict[str, object]:
+    """Resolve LLM settings from CLI flags, config, and provider defaults."""
+    llm_config = config.get('llm') if isinstance(config.get('llm'), dict) else {}
+    if not isinstance(llm_config, dict):
+        llm_config = {}
+
+    provider_options = llm_config.get('provider_options', {})
+    if not isinstance(provider_options, dict):
+        provider_options = {}
+    provider_options = dict(provider_options)
+
+    provider = args.llm or llm_config.get('provider')
+    model = args.llm_model or llm_config.get('model')
+    max_messages = (
+        args.llm_max
+        if args.llm_max is not None
+        else llm_config.get('max_messages', LLM_DEFAULT_MAX_MESSAGES)
+    )
+    message_filter = args.llm_filter or llm_config.get('filter', DEFAULT_LLM_FILTER)
+
+    if args.ollama_url:
+        provider_options['base_url'] = args.ollama_url
+    elif 'base_url' not in provider_options and provider == 'ollama':
+        provider_options['base_url'] = 'http://localhost:11434'
+
+    return {
+        'provider': provider,
+        'model': model,
+        'max_messages': max_messages,
+        'message_filter': message_filter,
+        'provider_options': provider_options,
+    }
+
+
+def _print_provider_listing() -> None:
+    """Print provider metadata sourced from the provider registry."""
+    print(_format_provider_listing())
 
 
 def main() -> int:
@@ -57,6 +188,7 @@ Examples:
 Industry presets: tech, finance, healthcare, real_estate, consulting, sales, marketing, entrepreneur
         """
     )
+    llm_providers = LLMAnalyzer.list_providers()
     parser.add_argument(
         'messages_csv',
         nargs='?',  # Optional for --list-llm-providers
@@ -76,6 +208,33 @@ Industry presets: tech, finance, healthcare, real_estate, consulting, sales, mar
         '--export-json',
         metavar='FILE',
         help='Export results to JSON file'
+    )
+    parser.add_argument(
+        '--export-csv',
+        metavar='FILE',
+        help='Export thread rollups to CSV file'
+    )
+    parser.add_argument(
+        '--export-unanswered-only',
+        action='store_true',
+        help='When exporting JSON/CSV, include only unanswered threads'
+    )
+    parser.add_argument(
+        '--export-label',
+        action='append',
+        metavar='LABEL',
+        help='When exporting JSON/CSV, include only threads matching this label (repeatable)'
+    )
+    parser.add_argument(
+        '--export-min-triage-score',
+        type=int,
+        metavar='N',
+        help='When exporting JSON/CSV, include only threads at or above this triage score'
+    )
+    parser.add_argument(
+        '--export-recommendation',
+        choices=['needs_reply', 'safe_to_ignore'],
+        help='When exporting JSON/CSV, include only threads with this recommendation'
     )
     parser.add_argument(
         '--export-html',
@@ -127,7 +286,7 @@ Industry presets: tech, finance, healthcare, real_estate, consulting, sales, mar
     llm_group = parser.add_argument_group('LLM Analysis Options')
     llm_group.add_argument(
         '--llm',
-        choices=['openai', 'anthropic', 'ollama', 'gemini', 'groq', 'mistral'],
+        choices=llm_providers,
         help='Enable LLM-powered analysis. Providers: openai, anthropic (API key required), '
              'ollama (local, free), gemini, groq, mistral'
     )
@@ -139,20 +298,20 @@ Industry presets: tech, finance, healthcare, real_estate, consulting, sales, mar
     llm_group.add_argument(
         '--llm-max',
         type=int,
-        default=50,
+        default=None,
         metavar='N',
-        help='Maximum messages to analyze with LLM (default: 50)'
+        help=f'Maximum messages to analyze with LLM (default: {LLM_DEFAULT_MAX_MESSAGES})'
     )
     llm_group.add_argument(
         '--llm-filter',
         choices=['time_requests', 'suspicious', 'all'],
-        default='time_requests',
+        default=None,
         help='Which messages to analyze with LLM (default: time_requests)'
     )
     llm_group.add_argument(
         '--ollama-url',
         metavar='URL',
-        default='http://localhost:11434',
+        default=None,
         help='Ollama server URL (default: http://localhost:11434)'
     )
     llm_group.add_argument(
@@ -304,52 +463,17 @@ Industry presets: tech, finance, healthcare, real_estate, consulting, sales, mar
 
     try:
         # Load custom config if provided
+        loaded_config: dict[str, object] = {}
         if args.config:
             logger.info(f"Loading custom config from {args.config}")
-            load_config(args.config)
+            loaded_config = load_config(args.config)
 
         # Build user profile
-        user_profile: UserProfile | None = None
-        if args.profile:
-            logger.info(f"Loading user profile from {args.profile}")
-            user_profile = UserProfile.from_json_file(args.profile)
-        elif args.industries or args.my_name or args.ignore_senders:
-            user_profile = UserProfile(
-                name=args.my_name,
-                industries=args.industries or [],
-                ignore_senders=args.ignore_senders or [],
-            )
+        user_profile = _resolve_user_profile(args, loaded_config)
 
         # Handle --list-llm-providers
         if args.list_llm_providers:
-            print("\n" + "=" * 60)
-            print("AVAILABLE LLM PROVIDERS")
-            print("=" * 60)
-            for name, info in LLMAnalyzer.get_provider_info().items():
-                print(f"\n  {name.upper()}:")
-                print(f"    Model: {info['default_model']}")
-                if info['requires_api_key']:
-                    print(f"    Env var: {info['env_var']}")
-                    url = LLM_PROVIDER_URLS.get(name, '')
-                    if url:
-                        print(f"    Get key: {url}")
-                else:
-                    print(f"    FREE - No API key required (runs locally)")
-                    url = LLM_PROVIDER_URLS.get(name, '')
-                    if url:
-                        print(f"    Download: {url}")
-                install = info['install'].replace('\n', '\n             ')
-                print(f"    Install: {install}")
-            print("\n" + "-" * 60)
-            print("QUICK START:")
-            print("-" * 60)
-            print("  Free (local):  --llm ollama")
-            print("  Fast & cheap:  --llm groq    (set GROQ_API_KEY)")
-            print("  Best quality:  --llm anthropic (set ANTHROPIC_API_KEY)")
-            print("\nExample:")
-            print("  set GROQ_API_KEY=your-key-here")
-            print("  python linkedin_message_analyzer.py messages.csv --llm groq --summarize")
-            print()
+            _print_provider_listing()
             return 0
 
         # Require messages_csv for all other operations
@@ -358,22 +482,27 @@ Industry presets: tech, finance, healthcare, real_estate, consulting, sales, mar
 
         # Initialize LLM analyzer if requested
         llm_analyzer: LLMAnalyzer | None = None
-        if args.llm:
+        llm_settings = _resolve_llm_settings(args, loaded_config)
+        llm_provider = llm_settings['provider']
+        if isinstance(llm_provider, str) and llm_provider:
             # Get provider info for API key handling
-            provider_info = LLMAnalyzer.get_provider_info().get(args.llm, {})
+            provider_info = LLMAnalyzer.get_provider_info().get(llm_provider, {})
             env_var = provider_info.get('env_var', '')
             requires_key = provider_info.get('requires_api_key', True)
+            setup_url = provider_info.get('setup_url', '')
 
             api_key = os.environ.get(env_var) if env_var else None
 
             if requires_key and not api_key:
-                url = LLM_PROVIDER_URLS.get(args.llm, '')
                 print(f"\n{'=' * 60}")
                 print(f"  ? API KEY NOT FOUND ERROR")
                 print(f"{'=' * 60}")
-                print(f"\n  Provider '{args.llm}' requires an API key.")
+                print(f"\n  Provider '{llm_provider}' requires an API key.")
                 print(f"\n  To fix this:")
-                print(f"  1. Get your API key from: {url}")
+                if setup_url:
+                    print(f"  1. Get your API key from: {setup_url}")
+                else:
+                    print("  1. Create an API key for the selected provider")
                 print(f"  2. Set the environment variable:")
                 print(f"     Windows:  set {env_var}=your-key-here")
                 print(f"     Linux:    export {env_var}=your-key-here")
@@ -381,17 +510,15 @@ Industry presets: tech, finance, healthcare, real_estate, consulting, sales, mar
                 print(f"     python linkedin_message_analyzer.py messages.csv --llm ollama")
                 print(f"\n  Run --list-llm-providers for all options.")
                 print()
-                logger.warning(f"No API key found for {args.llm}.")
+                logger.warning(f"No API key found for {llm_provider}.")
             else:
                 # Build provider-specific kwargs
-                provider_kwargs = {}
-                if args.llm == 'ollama':
-                    provider_kwargs['base_url'] = args.ollama_url
+                provider_kwargs = dict(llm_settings.get('provider_options', {}))
 
                 llm_analyzer = LLMAnalyzer(
-                    provider=args.llm,
+                    provider=llm_provider,
                     api_key=api_key,
-                    model=args.llm_model,
+                    model=llm_settings.get('model'),
                     **provider_kwargs,
                 )
 
@@ -407,8 +534,8 @@ Industry presets: tech, finance, healthcare, real_estate, consulting, sales, mar
         # Run LLM analysis if configured
         if llm_analyzer:
             analyzer.run_llm_analysis(
-                max_messages=args.llm_max,
-                message_filter=args.llm_filter,
+                max_messages=int(llm_settings['max_messages']),
+                message_filter=str(llm_settings['message_filter']),
             )
 
         analyzer.print_report(weeks_back=args.weeks)
@@ -433,7 +560,23 @@ Industry presets: tech, finance, healthcare, real_estate, consulting, sales, mar
             print(analyzer.generate_post_stats(weeks_back=args.weeks))
 
         if args.export_json:
-            analyzer.export_to_json(args.export_json)
+            analyzer.export_to_json(
+                args.export_json,
+                labels=args.export_label,
+                min_triage_score=args.export_min_triage_score,
+                unanswered_only=args.export_unanswered_only,
+                recommendation=args.export_recommendation,
+            )
+
+        if args.export_csv:
+            analyzer.export_to_csv(
+                args.export_csv,
+                labels=args.export_label,
+                min_triage_score=args.export_min_triage_score,
+                unanswered_only=args.export_unanswered_only,
+                recommendation=args.export_recommendation,
+            )
+            print(f"\nCSV export saved to: {args.export_csv}")
 
         if args.export_html:
             generate_html_report(analyzer, args.export_html)
@@ -522,7 +665,7 @@ Industry presets: tech, finance, healthcare, real_estate, consulting, sales, mar
             print("\n" + comparison.generate_comparison_report())
 
         # Advanced LLM features (require --llm)
-        if llm_analyzer and llm_analyzer._provider:
+        if llm_analyzer and getattr(llm_analyzer, '_provider', None):
             # Conversation summarization
             if args.summarize:
                 from lib.llm_advanced import ConversationSummarizer
@@ -567,7 +710,7 @@ Industry presets: tech, finance, healthcare, real_estate, consulting, sales, mar
                 clusterer = MessageClusterer(llm_analyzer._provider)
                 result = clusterer.cluster_messages(
                     analyzer.messages,
-                    max_messages=args.llm_max,
+                    max_messages=int(llm_settings['max_messages']),
                 )
                 print("\n" + clusterer.generate_cluster_report(result))
 
@@ -582,7 +725,7 @@ Industry presets: tech, finance, healthcare, real_estate, consulting, sales, mar
                             print(f"  Common phrases: {', '.join(cluster.common_phrases[:3])}")
 
         elif args.summarize or args.smart_replies or args.cluster or args.find_templates:
-            print("\nAdvanced LLM features require --llm flag. Example:")
+            print("\nAdvanced LLM features require an LLM provider via --llm or --config. Example:")
             print("  python linkedin_message_analyzer.py messages.csv --llm openai --summarize")
 
         # Web dashboard

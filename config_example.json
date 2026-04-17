@@ -10,6 +10,15 @@
       "\\bmy custom role\\b"
     ]
   },
+  "llm": {
+    "provider": "ollama",
+    "model": "qwen2.5:7b",
+    "max_messages": 25,
+    "filter": "time_requests",
+    "provider_options": {
+      "base_url": "http://localhost:11434"
+    }
+  },
   "time_request_keywords": [
     "\\b(quick call|brief call|coffee chat)\\b",
     "\\b(pick your brain|15 minutes)\\b"

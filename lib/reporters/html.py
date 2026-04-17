@@ -115,6 +115,8 @@ class HTMLReporter:
             </div>
         </section>
 
+        {self._generate_llm_section(stats)}
+
         {self._generate_hall_of_shame(stats)}
 
         {self._generate_weekly_breakdown(stats)}
@@ -156,18 +158,16 @@ class HTMLReporter:
         )
 
         # Count flattery and templates
-        flattery_count = len(getattr(a, 'flattery_messages', []))
-        template_count = len([
-            m for m in getattr(a, 'template_suspects', [])
-        ]) if hasattr(a, 'template_suspects') else 0
+        flattery_count = a.get_flattery_summary().get('messages_with_flattery', 0)
+        template_count = len(getattr(a, 'template_messages', []))
 
         # AI generated count
-        ai_count = len(getattr(a, 'ai_generated', [])) if hasattr(a, 'ai_generated') else 0
+        ai_count = len(getattr(a, 'ai_generated_messages', []))
 
         # Get repeat offenders
         sender_counts: dict[str, int] = {}
         for msg in getattr(a, 'messages', []):
-            sender = msg.get('FROM', 'Unknown')
+            sender = msg.get('from', 'Unknown')
             sender_counts[sender] = sender_counts.get(sender, 0) + 1
 
         repeat_offenders = [
@@ -176,21 +176,70 @@ class HTMLReporter:
         ]
         repeat_offenders.sort(key=lambda x: x[1], reverse=True)
 
+        weeks_analyzed = 0
+        if getattr(a, 'date_range', None):
+            days = max((a.date_range[1] - a.date_range[0]).days + 1, 1)
+            weeks_analyzed = max(1, (days + 6) // 7)
+
         return {
             'total_messages': len(getattr(a, 'messages', [])),
             'time_requests': len(getattr(a, 'time_requests', [])),
-            'financial_advisors': len(getattr(a, 'financial_advisors', [])),
-            'recruiters': len(getattr(a, 'recruiters', [])),
-            'franchise_consultants': len(getattr(a, 'franchise_consultants', [])),
-            'expert_networks': len(getattr(a, 'expert_networks', [])),
+            'financial_advisors': len(getattr(a, 'financial_advisor_messages', [])),
+            'recruiters': len(getattr(a, 'recruiter_messages', [])),
+            'franchise_consultants': len(getattr(a, 'franchise_consultant_messages', [])),
+            'expert_networks': len(getattr(a, 'expert_network_messages', [])),
             'total_time_requested': total_time,
             'flattery_count': flattery_count,
             'template_count': template_count,
             'ai_generated': ai_count,
-            'weeks_analyzed': getattr(a, 'weeks_analyzed', 4),
+            'weeks_analyzed': weeks_analyzed,
             'repeat_offenders': repeat_offenders[:10],
-            'sales_pitches': len(getattr(a, 'sales_pitches', [])) if hasattr(a, 'sales_pitches') else 0,
+            'sales_pitches': len(a.get_high_priority_messages()) if getattr(a, 'llm_analyses', None) else 0,
+            'llm': a.get_llm_run_info(),
         }
+
+    def _generate_llm_section(self, stats: dict) -> str:
+        """Generate a report section summarizing the active LLM run."""
+        llm = stats.get('llm', {})
+        if not llm.get('enabled'):
+            return ''
+
+        recommendation_items = ''.join(
+            f'<li><strong>{html.escape(name)}</strong>: {count}</li>'
+            for name, count in sorted(llm.get('recommendations', {}).items())
+        ) or '<li><strong>n/a</strong>: no completed analyses</li>'
+        intent_items = ''.join(
+            f'<li><strong>{html.escape(name)}</strong>: {count}</li>'
+            for name, count in sorted(llm.get('intents', {}).items())
+        ) or '<li><strong>n/a</strong>: no completed analyses</li>'
+        recommended_models = ', '.join(llm.get('recommended_models', [])) or 'n/a'
+
+        return f'''
+        <section class="quotable">
+            <h2>LLM Analysis Run</h2>
+            <div class="quote-box">
+                <p><strong>Provider:</strong> {html.escape(str(llm.get('provider', 'unknown')).upper())} ({html.escape(str(llm.get('provider_type', 'unknown')))})</p>
+                <p><strong>Model:</strong> {html.escape(str(llm.get('model', 'unknown')))} | <strong>Default:</strong> {html.escape(str(llm.get('default_model', 'unknown')))}</p>
+                <p><strong>Filter:</strong> {html.escape(str(llm.get('message_filter', 'n/a')))} | <strong>Requested max:</strong> {llm.get('max_messages', 0)} | <strong>Selected:</strong> {llm.get('selected_message_count', 0)}</p>
+                <p><strong>Completed:</strong> {llm.get('analyses_completed', 0)} | <strong>Failed:</strong> {llm.get('analyses_failed', 0)} | <strong>High priority:</strong> {llm.get('high_priority_count', 0)}</p>
+                <p><strong>Recommended models:</strong> {html.escape(recommended_models)}</p>
+                <div class="metric-grid">
+                    <div class="metric">
+                        <span class="metric-label">Recommendations</span>
+                        <ul>
+                            {recommendation_items}
+                        </ul>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Detected intents</span>
+                        <ul>
+                            {intent_items}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+        '''
 
     def _generate_pie_chart(self, stats: dict) -> str:
         """Generate an SVG pie chart."""
@@ -301,16 +350,16 @@ class HTMLReporter:
 
     def _generate_weekly_breakdown(self, stats: dict) -> str:
         """Generate weekly breakdown bar chart."""
-        # Get weekly data from analyzer if available
-        weekly = getattr(self.analyzer, 'weekly_summary', {})
+        weekly = self.analyzer.get_weekly_summary().get('time_requests_by_week', {})
 
         if not weekly:
             return ''
 
         bars = []
-        max_count = max(weekly.values()) if weekly else 1
+        max_count = max((bucket.get('count', 0) for bucket in weekly.values()), default=1)
 
-        for week, count in sorted(weekly.items())[-8:]:  # Last 8 weeks
+        for week, bucket in sorted(weekly.items())[-8:]:  # Last 8 weeks
+            count = bucket.get('count', 0)
             height = (count / max_count) * 150 if max_count > 0 else 0
             bars.append(f'''
                 <div class="bar-wrapper">
@@ -501,6 +550,16 @@ class HTMLReporter:
             color: #666;
             font-style: italic;
             margin-top: 5px;
+        }
+
+        .metric ul {
+            list-style: none;
+            margin-top: 12px;
+            padding-left: 0;
+        }
+
+        .metric li {
+            margin-bottom: 8px;
         }
 
         /* Hall of Shame */

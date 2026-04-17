@@ -31,9 +31,15 @@ class AnthropicProvider(LLMProvider):
     """
 
     name = "anthropic"
-    default_model = "claude-3-haiku-20240307"
+    default_model = "claude-3-5-haiku-latest"
     env_var = "ANTHROPIC_API_KEY"
     requires_api_key = True
+    description = "Claude models with strong reasoning quality and stable latest-model aliases."
+    setup_url = "https://console.anthropic.com/settings/keys"
+    recommended_models = ("claude-3-5-haiku-latest", "claude-3-7-sonnet-latest")
+    notes = (
+        "Latest-model aliases are recommended over dated snapshot model names.",
+    )
 
     def initialize(self) -> None:
         """Initialize the Anthropic client."""
@@ -165,4 +171,4 @@ class AnthropicProvider(LLMProvider):
 
     @classmethod
     def get_install_instructions(cls) -> str:
-        return "pip install anthropic>=0.18.0"
+        return "pip install anthropic>=0.76.0"

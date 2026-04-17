@@ -31,9 +31,15 @@ class OpenAIProvider(LLMProvider):
     """
 
     name = "openai"
-    default_model = "gpt-4o-mini"
+    default_model = "gpt-4.1-mini"
     env_var = "OPENAI_API_KEY"
     requires_api_key = True
+    description = "Hosted GPT models with strong structured-output support for inbox classification."
+    setup_url = "https://platform.openai.com/api-keys"
+    recommended_models = ("gpt-4.1-mini", "gpt-4o-mini")
+    notes = (
+        "Uses the Chat Completions API with JSON response formatting.",
+    )
 
     def initialize(self) -> None:
         """Initialize the OpenAI client."""
@@ -170,4 +176,4 @@ class OpenAIProvider(LLMProvider):
 
     @classmethod
     def get_install_instructions(cls) -> str:
-        return "pip install openai>=1.0.0"
+        return "pip install openai>=1.60.0"

@@ -138,6 +138,116 @@ summary = analyzer.get_weekly_summary(weeks_back: int = 12) -> dict
 }
 ```
 
+### get_conversation_threads()
+
+Group parsed messages into reusable conversation-level threads.
+
+```python
+threads = analyzer.get_conversation_threads(my_name: str | None = None) -> dict[str, ConversationThread]
+```
+
+**Returns:**
+
+```python
+{
+    'abc123': {
+        'conversation_id': 'abc123',
+        'conversation_title': 'Reaching out',
+        'participants': ['Jane Doe', 'John Smith'],
+        'primary_sender': 'John Smith',
+        'message_count': 3,
+        'incoming_count': 2,
+        'outgoing_count': 1,
+        'first_message_at': datetime(...),
+        'last_message_at': datetime(...),
+        'has_response_from_me': True,
+        'messages': [...],
+    },
+}
+```
+
+### get_sender_summaries()
+
+Roll up thread activity into sender-level summaries for ranking or triage.
+
+```python
+summaries = analyzer.get_sender_summaries(my_name: str | None = None) -> list[SenderSummary]
+```
+
+**Returns:**
+
+```python
+[
+    {
+        'sender': 'John Smith',
+        'conversation_count': 2,
+        'message_count': 4,
+        'responded_conversation_count': 0,
+        'unanswered_conversation_count': 2,
+        'unanswered_message_count': 4,
+        'has_received_response': False,
+        'first_contact': datetime(...),
+        'last_contact': datetime(...),
+        'conversation_ids': ['abc123', 'def456'],
+    },
+]
+```
+
+### get_unanswered_threads()
+
+Return unanswered incoming threads ranked by persistence and recency.
+
+```python
+threads = analyzer.get_unanswered_threads(
+    my_name: str | None = None,
+    min_incoming_messages: int = 2,
+) -> list[ConversationThread]
+```
+
+**Returns:**
+
+```python
+[
+    {
+        'conversation_id': 'abc123',
+        'conversation_title': 'Quick intro',
+        'primary_sender': 'John Smith',
+        'incoming_count': 3,
+        'message_count': 3,
+        'has_response_from_me': False,
+        'last_message_at': datetime(...),
+        'messages': [...],
+    },
+]
+```
+
+### get_thread_triage_queue()
+
+Return scored thread triage items with category labels.
+
+```python
+items = analyzer.get_thread_triage_queue(
+    my_name: str | None = None,
+    include_responded: bool = False,
+) -> list[ThreadTriageItem]
+```
+
+**Returns:**
+
+```python
+[
+    {
+        'conversation_id': 'abc123',
+        'primary_sender': 'John Smith',
+        'incoming_count': 3,
+        'triage_score': 47,
+        'labels': ['time_request', 'fake_personalization'],
+        'last_message_at': datetime(...),
+        'latest_message_preview': 'Checking back in...',
+    },
+]
+```
+
 ### run_llm_analysis()
 
 Run LLM-powered analysis on messages (requires llm_analyzer).

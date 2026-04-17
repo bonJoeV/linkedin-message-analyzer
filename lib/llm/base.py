@@ -17,6 +17,48 @@ from lib.exceptions import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class ProviderMetadata:
+    """User-facing metadata about an LLM provider."""
+
+    name: str
+    default_model: str
+    env_var: str
+    requires_api_key: bool
+    install: str
+    setup_url: str = ""
+    description: str = ""
+    recommended_models: tuple[str, ...] = ()
+    config_fields: tuple[tuple[str, str], ...] = ()
+    notes: tuple[str, ...] = ()
+
+    @property
+    def provider_type(self) -> str:
+        """Return a simple user-facing provider type label."""
+        if self.requires_api_key:
+            return "hosted api"
+        return "local / self-hosted"
+
+    def as_dict(self) -> dict[str, Any]:
+        """Convert metadata into a JSON/CLI-friendly shape."""
+        return {
+            "name": self.name,
+            "provider_type": self.provider_type,
+            "default_model": self.default_model,
+            "env_var": self.env_var,
+            "requires_api_key": self.requires_api_key,
+            "install": self.install,
+            "setup_url": self.setup_url,
+            "description": self.description,
+            "recommended_models": list(self.recommended_models),
+            "config_fields": [
+                {"name": field_name, "description": description}
+                for field_name, description in self.config_fields
+            ],
+            "notes": list(self.notes),
+        }
+
+
 @dataclass
 class RateLimitInfo:
     """Rate limit information from API response headers.
@@ -94,6 +136,11 @@ class LLMProvider(ABC):
     default_model: str = ""
     env_var: str = ""
     requires_api_key: bool = True
+    description: str = ""
+    setup_url: str = ""
+    recommended_models: tuple[str, ...] = ()
+    config_fields: tuple[tuple[str, str], ...] = ()
+    notes: tuple[str, ...] = ()
 
     # Retry configuration
     max_retries: int = 3
@@ -266,6 +313,23 @@ class LLMProvider(ABC):
         """
         return f"pip install {cls.name}"
 
+    @classmethod
+    def get_provider_metadata(cls) -> ProviderMetadata:
+        """Return structured metadata for this provider."""
+        models = tuple(dict.fromkeys((cls.default_model, *cls.recommended_models)))
+        return ProviderMetadata(
+            name=cls.name,
+            default_model=cls.default_model,
+            env_var=cls.env_var,
+            requires_api_key=cls.requires_api_key,
+            install=cls.get_install_instructions(),
+            setup_url=cls.setup_url,
+            description=cls.description,
+            recommended_models=models,
+            config_fields=cls.config_fields,
+            notes=cls.notes,
+        )
+
 
 class ProviderRegistry:
     """Registry for LLM providers with auto-discovery.
@@ -325,13 +389,9 @@ class ProviderRegistry:
             Dict mapping provider name to metadata dict
         """
         return {
-            name: {
-                "default_model": p.default_model,
-                "env_var": p.env_var,
-                "requires_api_key": p.requires_api_key,
-                "install": p.get_install_instructions(),
-            }
+            name: provider_class.get_provider_metadata().as_dict()
             for name, p in cls._providers.items()
+            for provider_class in [p]
         }
 
     @classmethod

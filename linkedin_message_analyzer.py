@@ -28,6 +28,9 @@ from lib import (
     Message,
     TimeRequest,
     FlatteryMessage,
+    ConversationThread,
+    SenderSummary,
+    ThreadTriageItem,
     # Configuration
     INDUSTRY_PRESETS,
     # LinkedIn limits
@@ -61,6 +64,9 @@ __all__ = [
     'Message',
     'TimeRequest',
     'FlatteryMessage',
+    'ConversationThread',
+    'SenderSummary',
+    'ThreadTriageItem',
     # Configuration
     'INDUSTRY_PRESETS',
     # LinkedIn limits
